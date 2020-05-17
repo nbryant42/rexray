@@ -17,6 +17,7 @@ require (
 	github.com/cesanta/validate-json v0.0.0-20150603122804-2f16017c76fc
 	github.com/digitalocean/godo v1.2.0
 	github.com/docker/go-plugins-helpers v0.0.0-20170817192157-a9ef19c479cb
+	github.com/fishy/rowlock v0.2.1
 	github.com/gophercloud/gophercloud v0.0.0-20170916161221-b4c2377fa779
 	github.com/gorilla/context v0.0.0-20160226214623-1ea25387ff6f
 	github.com/gorilla/mux v1.4.0

@@ -52,6 +52,8 @@ github.com/docker/go-plugins-helpers v0.0.0-20170817192157-a9ef19c479cb h1:cjBya
 github.com/docker/go-plugins-helpers v0.0.0-20170817192157-a9ef19c479cb/go.mod h1:LFyLie6XcDbyKGeVK6bHe+9aJTYCxWLBg5IrJZOaXKA=
 github.com/fatih/color v1.13.0 h1:8LOYc1KYPPmyKMuN8QV2DNRWNbLo6LZ0iLs8+mlH53w=
 github.com/fatih/color v1.13.0/go.mod h1:kLAiJbzzSOZDVNGyDpeOxJ47H46qBXwg5ILebYFFOfk=
+github.com/fishy/rowlock v0.2.1 h1:xr41j71ai/eSicKnVHJWo33tIiXJ0Zcj4VKGMMs8g6Y=
+github.com/fishy/rowlock v0.2.1/go.mod h1:LvlszqohGzHS3HOL120Q0U9ZVl76bIIQBLcEN8YpKjE=
 github.com/fsnotify/fsnotify v1.4.2 h1:v5tKwtf2hNhBV24eNYfQ5UmvFOGlOCmRqk7/P1olxtk=
 github.com/fsnotify/fsnotify v1.4.2/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMoQvtojpjFo=
 github.com/golang/protobuf v0.0.0-20170902000452-17ce1425424a h1:pklYnGCcDc7eaFCzmrTM4fiNgWT5z49peC8hOVdDG88=
