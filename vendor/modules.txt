@@ -301,18 +301,19 @@ github.com/thecodeteam/goscaleio/types/v1
 golang.org/x/crypto/pkcs12
 golang.org/x/crypto/pkcs12/internal/rc2
 golang.org/x/crypto/ssh/terminal
-# golang.org/x/net v0.0.0-20170828231752-66aacef3dd8a
-## explicit
+# golang.org/x/net v0.0.0-20220906165146-f3363e06e74c
+## explicit; go 1.17
 golang.org/x/net/context
 golang.org/x/net/context/ctxhttp
 golang.org/x/net/html
 golang.org/x/net/html/atom
 golang.org/x/net/html/charset
+golang.org/x/net/http/httpguts
 golang.org/x/net/http2
 golang.org/x/net/http2/hpack
 golang.org/x/net/idna
+golang.org/x/net/internal/socks
 golang.org/x/net/internal/timeseries
-golang.org/x/net/lex/httplex
 golang.org/x/net/proxy
 golang.org/x/net/trace
 # golang.org/x/oauth2 v0.0.0-20170901193052-d89af98d7c6b
@@ -324,12 +325,13 @@ golang.org/x/oauth2/jws
 golang.org/x/oauth2/jwt
 # golang.org/x/sync v0.1.0
 ## explicit
-# golang.org/x/sys v0.0.0-20210630005230-0f9fa26af87c => golang.org/x/sys v0.0.0-20170906000021-9aade4d3a3b7
-## explicit
+# golang.org/x/sys v0.0.0-20220728004956-3c1f35247d10
+## explicit; go 1.17
+golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix
 golang.org/x/sys/windows
-# golang.org/x/text v0.0.0-20170901153044-bd91bbf73e9a
-## explicit
+# golang.org/x/text v0.3.7
+## explicit; go 1.17
 golang.org/x/text/encoding
 golang.org/x/text/encoding/charmap
 golang.org/x/text/encoding/htmlindex
@@ -340,6 +342,8 @@ golang.org/x/text/encoding/korean
 golang.org/x/text/encoding/simplifiedchinese
 golang.org/x/text/encoding/traditionalchinese
 golang.org/x/text/encoding/unicode
+golang.org/x/text/internal/language
+golang.org/x/text/internal/language/compact
 golang.org/x/text/internal/tag
 golang.org/x/text/internal/utf8internal
 golang.org/x/text/language
@@ -397,7 +401,6 @@ google.golang.org/grpc/transport
 gopkg.in/yaml.v2
 # launchpad.net/gocheck v0.0.0-20140225173054-000000000087
 ## explicit
-# golang.org/x/sys => golang.org/x/sys v0.0.0-20170906000021-9aade4d3a3b7
 # github.com/jteeuwen/go-bindata => github.com/akutz/go-bindata v3.0.8-0.20160412065030-1dd44b25b79c+incompatible
 # github.com/sirupsen/logrus => github.com/akutz/logrus v0.8.7-0.20170830210741-d842de504ca8
 # gopkg.in/yaml.v2 => github.com/akutz/yaml v0.0.0-20160725221316-bc35f417f8a7

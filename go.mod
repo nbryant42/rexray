@@ -37,7 +37,7 @@ require (
 	github.com/thecodeteam/goisilon v1.7.0
 	github.com/thecodeteam/goscaleio v0.1.1-0.20171027002729-35ca2e98889a
 	golang.org/x/crypto v0.0.0-20170825220121-81e90905daef
-	golang.org/x/net v0.0.0-20170828231752-66aacef3dd8a
+	golang.org/x/net v0.0.0-20220906165146-f3363e06e74c
 	golang.org/x/oauth2 v0.0.0-20170901193052-d89af98d7c6b
 	google.golang.org/api v0.0.0-20170906000354-38eaa396bab4
 	google.golang.org/grpc v1.6.0
@@ -72,8 +72,8 @@ require (
 	github.com/spf13/viper v1.0.0 // indirect
 	github.com/tent/http-link-go v0.0.0-20130702225549-ac974c61c2f9 // indirect
 	golang.org/x/sync v0.1.0 // indirect
-	golang.org/x/sys v0.0.0-20210630005230-0f9fa26af87c // indirect
-	golang.org/x/text v0.0.0-20170901153044-bd91bbf73e9a // indirect
+	golang.org/x/sys v0.0.0-20220728004956-3c1f35247d10 // indirect
+	golang.org/x/text v0.3.7 // indirect
 	google.golang.org/appengine v1.0.0 // indirect
 	google.golang.org/genproto v0.0.0-20170904050139-595979c8a7bf // indirect
 	gopkg.in/airbrake/gobrake.v2 v2.0.9 // indirect
@@ -81,9 +81,6 @@ require (
 	gopkg.in/gemnasium/logrus-airbrake-hook.v2 v2.1.2 // indirect
 	launchpad.net/gocheck v0.0.0-20140225173054-000000000087 // indirect
 )
-
-// pin the same version that was used prior to the `go mod` migration:
-replace golang.org/x/sys => golang.org/x/sys v0.0.0-20170906000021-9aade4d3a3b7
 
 replace github.com/jteeuwen/go-bindata => github.com/akutz/go-bindata v3.0.8-0.20160412065030-1dd44b25b79c+incompatible
 
