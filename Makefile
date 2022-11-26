@@ -52,7 +52,7 @@ endif
 # available then print an error
 $(PROG):
 ifeq (1,$(DOCKER))
-	docker run -it \
+	docker run -it --rm \
 	  -v "$(PWD)":"/go/src/$(GO_IMPORT_PATH)" golang:$(GO_VERSION) \
 	  bash -c "cd \"src/$(GO_IMPORT_PATH)\" && \
 	  XGOOS=$(GOOS) XGOARCH=$(GOARCH) GOOS= GOARCH= go generate && \
@@ -89,7 +89,7 @@ endif
 
 $(SEMVER_MK):
 ifeq (1,$(DOCKER))
-	docker run -it \
+	docker run -it --rm \
 	  -v "$(PWD)":"/go/src/$(GO_IMPORT_PATH)" golang:$(GO_VERSION) \
 	  bash -c "cd \"src/$(GO_IMPORT_PATH)\" && \
 	  XGOOS=$(GOOS) XGOARCH=$(GOARCH) GOOS= GOARCH= go run core/semver/semver.go -f mk -o $@"
@@ -465,7 +465,7 @@ A REX-Ray binary with a matching checksum can be created
 locally using Docker:
 
 ```
-$$ docker run -it \\
+$$ docker run -it --rm \\
   -v "$$(pwd)":"$(DOCKER_OUT_DIR)" \\
   golang:$(GO_VERSION) \\
   bash -c "git clone https://github.com/$(TRAVIS_REPO_SLUG) \\
