@@ -1,11 +1,12 @@
-FROM alpine:3.6
+FROM alpine:3.17
 
-RUN apk update
+RUN apk -U upgrade
 RUN apk add xfsprogs e2fsprogs ca-certificates libaio curl
 RUN echo http://dl-cdn.alpinelinux.org/alpine/edge/testing >> /etc/apk/repositories && apk update && apk add numactl
 RUN curl -sSL https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.25-r0/sgerrand.rsa.pub > /etc/apk/keys/sgerrand.rsa.pub
 RUN curl -sSLO https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.25-r0/glibc-2.25-r0.apk
 RUN apk add glibc-2.25-r0.apk
+RUN rm -rf /var/cache/apk/*
 RUN rm -f glibc-2.25-r0.apk
 RUN ln -s /lib/libc.musl-x86_64.so.1 /usr/glibc-compat/lib/
 RUN ln -s /lib/libuuid.so.1 /usr/glibc-compat/lib/

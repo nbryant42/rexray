@@ -335,41 +335,13 @@ ifeq (,$(DOCKER_PLUGIN_TYPE))
 endif
 endif
 
-.PHONY: docker-build-plugin build-docker-plugin push-docker-plugin
+clean: clean-plugins
 
+clean-plugins:
+	sudo rm -rf .docker/plugins/*/rexray.sh .docker/plugins/*/rexray.yml .docker/plugins/*/rexray .docker/plugins/*/rootfs .docker/plugins/*/Dockerfile
 
-################################################################################
-##                                   DEP                                      ##
-################################################################################
-DEP := ./dep
-DEP_VER ?= 0.3.0
-DEP_ZIP := dep-$$GOHOSTOS-$$GOHOSTARCH.zip
-DEP_URL := https://github.com/golang/dep/releases/download/v$(DEP_VER)/$$DEP_ZIP
+.PHONY: docker-build-plugin build-docker-plugin push-docker-plugin clean-plugins
 
-$(DEP):
-	GOVERSION=$$(go version | awk '{print $$4}') && \
-	GOHOSTOS=$$(echo $$GOVERSION | awk -F/ '{print $$1}') && \
-	GOHOSTARCH=$$(echo $$GOVERSION | awk -F/ '{print $$2}') && \
-	DEP_ZIP="$(DEP_ZIP)" && \
-	DEP_URL="$(DEP_URL)" && \
-	mkdir -p .dep && \
-	cd .dep && \
-	curl -sSLO $$DEP_URL && \
-	unzip "$$DEP_ZIP" && \
-	mv $(@F) ../ && \
-	cd ../ && \
-	rm -fr .dep
-ifneq (./dep,$(DEP))
-dep: $(DEP)
-endif
-
-dep-update: | $(DEP)
-	$(DEP) ensure -v
-
-dep-install: | $(DEP)
-	$(DEP) ensure -v -vendor-only
-
-.PHONY: dep-update dep-install
 
 ################################################################################
 ##                                   GIST                                     ##
