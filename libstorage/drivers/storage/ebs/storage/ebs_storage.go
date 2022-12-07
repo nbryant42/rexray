@@ -12,7 +12,6 @@ import (
 
 	gofig "github.com/akutz/gofig/types"
 	"github.com/akutz/goof"
-	"github.com/fishy/rowlock"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -52,7 +51,6 @@ type driver struct {
 	maxAttempts   int
 	statusDelay   int64
 	statusTimeout time.Duration
-	lock          *rowlock.RowLock
 }
 
 func init() {
@@ -62,17 +60,11 @@ func init() {
 }
 
 func newDriver() types.StorageDriver {
-	return &driver{
-		name: ebs.Name,
-		lock: rowlock.NewRowLock(rowlock.MutexNewLocker),
-	}
+	return &driver{name: ebs.Name}
 }
 
 func newEC2Driver() types.StorageDriver {
-	return &driver{
-		name: ebs.NameEC2,
-		lock: rowlock.NewRowLock(rowlock.MutexNewLocker),
-	}
+	return &driver{name: ebs.NameEC2}
 }
 
 func (d *driver) Name() string {
@@ -316,9 +308,6 @@ func (d *driver) VolumeInspect(
 // VolumeCreate creates a new volume.
 func (d *driver) VolumeCreate(ctx types.Context, volumeName string,
 	opts *types.VolumeCreateOpts) (*types.Volume, error) {
-
-	d.lock.Lock(volumeName)
-	defer d.lock.Unlock(volumeName)
 
 	if opts.Size == nil {
 		size := int64(minSizeGiB)
@@ -564,24 +553,6 @@ func (d *driver) VolumeRemove(
 	ctx types.Context,
 	volumeID string,
 	opts *types.VolumeRemoveOpts) error {
-
-	d.lock.Lock(volumeID)
-	defer d.lock.Unlock(volumeID)
-
-	// If the volume has already been removed, return an error
-	ec2vols, err := d.getVolume(ctx, "", volumeID)
-	if err != nil {
-		return goof.WithError("error getting volume", err)
-	}
-	volumes, convErr := d.toTypesVolume(ctx, ec2vols, 0)
-	if convErr != nil {
-		return goof.WithError("error converting to types.Volume", convErr)
-	}
-
-	if len(volumes) == 0 {
-		return goof.New("volume has already been removed")
-	}
-
 	// Initialize for logging
 	fields := map[string]interface{}{
 		"provider": d.Name(),
@@ -594,7 +565,7 @@ func (d *driver) VolumeRemove(
 	dvInput := &awsec2.DeleteVolumeInput{
 		VolumeId: &volumeID,
 	}
-	_, err = mustSession(ctx).DeleteVolume(dvInput)
+	_, err := mustSession(ctx).DeleteVolume(dvInput)
 	if err != nil {
 		return goof.WithFieldsE(fields, "error deleting volume", err)
 	}
@@ -613,12 +584,6 @@ func (d *driver) VolumeAttach(
 	ctx types.Context,
 	volumeID string,
 	opts *types.VolumeAttachOpts) (*types.Volume, string, error) {
-
-	// We need to take a Mutex in case two containers asking for the same
-	// volume were started simultanously.
-	d.lock.Lock(volumeID)
-	defer d.lock.Unlock(volumeID)
-
 	// review volume with attachments to any host
 	ec2vols, err := d.getVolume(ctx, volumeID, "")
 	if err != nil {
@@ -635,67 +600,43 @@ func (d *driver) VolumeAttach(
 	if len(volumes) == 0 {
 		return nil, "", goof.New("no volume found")
 	}
-	volume := volumes[0]
-
-	// If the volume is already attached to our instance, we must skip the whole
-	// detach / wait / attach part and finish early
-	mountPoint := ""
-	awsVolumes, err := mustSession(ctx).DescribeVolumes(&awsec2.DescribeVolumesInput{
-		VolumeIds: []*string{&volumeID},
-	})
-	if err != nil {
-		return nil, "", goof.WithError("failed to get volume information", err)
-	}
-	if len(awsVolumes.Volumes) == 0 {
-		return nil, "", goof.Newf("failed to find volume %q", volumeID)
-	}
-	for _, attachment := range awsVolumes.Volumes[0].Attachments {
-		if *attachment.InstanceId == *mustInstanceIDID(ctx) {
-			mountPoint = *attachment.Device
-			break
+	// Check if volume is already attached
+	if len(volumes[0].Attachments) > 0 {
+		// Detach already attached volume if forced
+		if !opts.Force {
+			return nil, "", errVolAlreadyAttached
 		}
-	}
-
-	if mountPoint == "" {
-		// Check if volume is already attached
-		if len(volume.Attachments) > 0 {
-			// Detach already attached volume if forced
-			if !opts.Force {
-				return nil, "", errVolAlreadyAttached
-			}
-			_, err := d.VolumeDetach(
-				ctx,
-				volumeID,
-				&types.VolumeDetachOpts{
-					Force: opts.Force,
-					Opts:  opts.Opts,
-				})
-			if err != nil {
-				return nil, "", goof.WithError("error detaching volume", err)
-			}
-		}
-
-		if opts.NextDevice == nil {
-			return nil, "", errMissingNextDevice
-		}
-
-		// Attach volume via helper function which uses EC2 API call
-		err = d.attachVolume(ctx, volumeID, volume.Name, *opts.NextDevice)
-		mountPoint = *opts.NextDevice
+		_, err := d.VolumeDetach(
+			ctx,
+			volumeID,
+			&types.VolumeDetachOpts{
+				Force: opts.Force,
+				Opts:  opts.Opts,
+			})
 		if err != nil {
-			return nil, "", goof.WithFieldsE(
-				log.Fields{
-					"provider": d.Name(),
-					"volumeID": volumeID},
-				"error attaching volume",
-				err,
-			)
+			return nil, "", goof.WithError("error detaching volume", err)
 		}
+	}
 
-		// Wait for volume's status to update
-		if err = d.waitVolumeComplete(ctx, volumeID, waitVolumeAttach); err != nil {
-			return nil, "", goof.WithError("error waiting for volume attach", err)
-		}
+	if opts.NextDevice == nil {
+		return nil, "", errMissingNextDevice
+	}
+
+	// Attach volume via helper function which uses EC2 API call
+	err = d.attachVolume(ctx, volumeID, volumes[0].Name, *opts.NextDevice)
+	if err != nil {
+		return nil, "", goof.WithFieldsE(
+			log.Fields{
+				"provider": d.Name(),
+				"volumeID": volumeID},
+			"error attaching volume",
+			err,
+		)
+	}
+
+	// Wait for volume's status to update
+	if err = d.waitVolumeComplete(ctx, volumeID, waitVolumeAttach); err != nil {
+		return nil, "", goof.WithError("error waiting for volume attach", err)
 	}
 
 	// Check if successful attach
@@ -710,7 +651,7 @@ func (d *driver) VolumeAttach(
 
 	// Token is the attachment's device name, which will be matched
 	// to the executor's device ID
-	return attachedVol, mountPoint, nil
+	return attachedVol, *opts.NextDevice, nil
 }
 
 var errVolAlreadyDetached = goof.New("volume already detached")
@@ -720,10 +661,6 @@ func (d *driver) VolumeDetach(
 	ctx types.Context,
 	volumeID string,
 	opts *types.VolumeDetachOpts) (*types.Volume, error) {
-
-	d.lock.Lock(volumeID)
-	defer d.lock.Unlock(volumeID)
-
 	// review volume with attachments to any host
 	ec2vols, err := d.getVolume(ctx, volumeID, "")
 	if err != nil {

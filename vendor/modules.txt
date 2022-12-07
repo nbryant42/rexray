@@ -122,9 +122,6 @@ github.com/docker/go-plugins-helpers/sdk
 github.com/docker/go-plugins-helpers/volume
 # github.com/fatih/color v1.13.0
 ## explicit; go 1.13
-# github.com/fishy/rowlock v0.2.1
-## explicit
-github.com/fishy/rowlock
 # github.com/fsnotify/fsnotify v1.4.2
 ## explicit
 github.com/fsnotify/fsnotify
