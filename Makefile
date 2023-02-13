@@ -54,7 +54,8 @@ $(PROG):
 ifeq (1,$(DOCKER))
 	docker run -it --rm \
 	  -v "$(PWD)":"/go/src/$(GO_IMPORT_PATH)" golang:$(GO_VERSION) \
-	  bash -c "git config --global --add safe.directory /go/src/github.com/rexray/rexray && \
+	  sh -c "apk add git && \
+	  git config --global --add safe.directory /go/src/github.com/rexray/rexray && \
 	  cd \"src/$(GO_IMPORT_PATH)\" && \
 	  XGOOS=$(GOOS) XGOARCH=$(GOARCH) GOOS= GOARCH= go generate && \
 	  GOOS=$(GOOS) GOARCH=$(GOARCH) go $(GOBUILD) -o \"$(PROG)\""
@@ -92,7 +93,9 @@ $(SEMVER_MK):
 ifeq (1,$(DOCKER))
 	docker run -it --rm \
 	  -v "$(PWD)":"/go/src/$(GO_IMPORT_PATH)" golang:$(GO_VERSION) \
-	  bash -c "cd \"src/$(GO_IMPORT_PATH)\" && \
+	  sh -c "apk add git && \
+	  git config --global --add safe.directory /go/src/github.com/rexray/rexray && \
+	  cd \"src/$(GO_IMPORT_PATH)\" && \
 	  XGOOS=$(GOOS) XGOARCH=$(GOARCH) GOOS= GOARCH= go run core/semver/semver.go -f mk -o $@"
 else
 	XGOOS=$(GOOS) XGOARCH=$(GOARCH) GOOS= GOARCH= go run core/semver/semver.go -f mk -o $@
