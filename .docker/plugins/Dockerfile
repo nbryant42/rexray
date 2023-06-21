@@ -1,4 +1,4 @@
-FROM alpine:3.6
+FROM python:3-alpine3.17
 
 RUN apk update
 RUN apk add xfsprogs e2fsprogs ca-certificates

@@ -191,29 +191,28 @@ func (d *driver) LocalDevices(
 			// the device as (nvme ignore this)
 			if out, err := exec.Command(
 				d.nvmeBinPath,
-				"id-ctrl",
-				"--raw-binary", devPath).Output(); err == nil {
+				"-b", devPath).Output(); err == nil {
 
-				// read the binary output slice and trim it
-				dev := strings.TrimSpace(string(out[3072:3104]))
+				// read the device name and trim it
+				dev := strings.TrimSpace(string(out))
+				if !strings.HasPrefix(dev, "/dev/") {
+					dev = path.Join("/dev/", dev)
+				}
 
-				// if the result contains a /dev/ then we got a match
-				if strings.Contains(dev, "/dev/") {
-					ctx.WithFields(map[string]interface{}{
-						"deviceName": devName,
-						"device":     dev,
-					}).Debug("found symlink")
-					// if the alias / udev path exist, its a match
-					if ok, err := fileExists(dev); !ok {
-						if err != nil {
-							ctx.WithField("devicePath", dev).WithError(err).Error(
-								"error checking if device exists")
-							return nil, err
-						}
-					} else {
-						devName = strings.TrimLeft(dev, "/dev/")
-						devPath = dev
+				ctx.WithFields(map[string]interface{}{
+					"deviceName": devName,
+					"device":     dev,
+				}).Debug("found symlink")
+				// if the alias / udev path exist, its a match
+				if ok, err := fileExists(dev); !ok {
+					if err != nil {
+						ctx.WithField("devicePath", dev).WithError(err).Error(
+							"error checking if device exists")
+						return nil, err
 					}
+				} else {
+					devName = strings.TrimLeft(dev, "/dev/")
+					devPath = dev
 				}
 			}
 		}

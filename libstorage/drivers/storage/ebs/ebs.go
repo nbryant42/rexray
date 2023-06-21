@@ -113,7 +113,7 @@ func init() {
 		ConfigStatusInitDelay)
 	r.Key(gofig.String, "", defaultStatusTimeout, "Status Timeout",
 		ConfigStatusTimeout)
-	r.Key(gofig.String, "", "/usr/sbin/nvme",
+	r.Key(gofig.String, "", "/usr/sbin/ebsnvme-id",
 		"Path to the nvme program", ConfigNvmeBinPath)
 
 	r.Key(gofig.String, "", "", "", NameEC2+"."+AccessKey)

@@ -1,4 +1,4 @@
-FROM alpine:3.17
+FROM python:3-alpine3.17
 
 RUN apk -U upgrade
 RUN apk add xfsprogs e2fsprogs ca-certificates nvme-cli
@@ -9,8 +9,9 @@ RUN mkdir -p /etc/rexray /run/docker/plugins /var/lib/rexray/volumes
 ADD rexray /usr/bin/rexray
 ADD rexray.yml /etc/rexray/rexray.yml
 
+ADD ebsnvme-id /usr/sbin/ebsnvme-id
 ADD rexray.sh /rexray.sh
-RUN chmod +x /rexray.sh
+RUN chmod +x /rexray.sh /usr/sbin/ebsnvme-id
 
 CMD [ "rexray", "start", "--nopid" ]
 ENTRYPOINT [ "/rexray.sh" ]
