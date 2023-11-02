@@ -2,12 +2,14 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
+//go:build !appengine
 // +build !appengine
 
 package internal
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -24,7 +26,6 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
-	netcontext "golang.org/x/net/context"
 
 	basepb "google.golang.org/appengine/internal/base"
 	logpb "google.golang.org/appengine/internal/log"
@@ -43,6 +44,7 @@ var (
 	curNamespaceHeader = http.CanonicalHeaderKey("X-AppEngine-Current-Namespace")
 	userIPHeader       = http.CanonicalHeaderKey("X-AppEngine-User-IP")
 	remoteAddrHeader   = http.CanonicalHeaderKey("X-AppEngine-Remote-Addr")
+	devRequestIdHeader = http.CanonicalHeaderKey("X-Appengine-Dev-Request-Id")
 
 	// Outgoing headers.
 	apiEndpointHeader      = http.CanonicalHeaderKey("X-Google-RPC-Service-Endpoint")
@@ -56,19 +58,28 @@ var (
 
 	apiHTTPClient = &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			Dial:  limitDial,
+			Proxy:               http.ProxyFromEnvironment,
+			Dial:                limitDial,
+			MaxIdleConns:        1000,
+			MaxIdleConnsPerHost: 10000,
+			IdleConnTimeout:     90 * time.Second,
 		},
 	}
 )
 
-func apiURL() *url.URL {
+func apiURL(ctx context.Context) *url.URL {
 	host, port := "appengine.googleapis.internal", "10001"
 	if h := os.Getenv("API_HOST"); h != "" {
 		host = h
 	}
+	if hostOverride := ctx.Value(apiHostOverrideKey); hostOverride != nil {
+		host = hostOverride.(string)
+	}
 	if p := os.Getenv("API_PORT"); p != "" {
 		port = p
+	}
+	if portOverride := ctx.Value(apiPortOverrideKey); portOverride != nil {
+		port = portOverride.(string)
 	}
 	return &url.URL{
 		Scheme: "http",
@@ -77,79 +88,97 @@ func apiURL() *url.URL {
 	}
 }
 
-func handleHTTP(w http.ResponseWriter, r *http.Request) {
-	c := &context{
-		req:       r,
-		outHeader: w.Header(),
-		apiURL:    apiURL(),
-	}
-	stopFlushing := make(chan int)
-
-	ctxs.Lock()
-	ctxs.m[r] = c
-	ctxs.Unlock()
-	defer func() {
-		ctxs.Lock()
-		delete(ctxs.m, r)
-		ctxs.Unlock()
-	}()
-
-	// Patch up RemoteAddr so it looks reasonable.
-	if addr := r.Header.Get(userIPHeader); addr != "" {
-		r.RemoteAddr = addr
-	} else if addr = r.Header.Get(remoteAddrHeader); addr != "" {
-		r.RemoteAddr = addr
-	} else {
-		// Should not normally reach here, but pick a sensible default anyway.
-		r.RemoteAddr = "127.0.0.1"
-	}
-	// The address in the headers will most likely be of these forms:
-	//	123.123.123.123
-	//	2001:db8::1
-	// net/http.Request.RemoteAddr is specified to be in "IP:port" form.
-	if _, _, err := net.SplitHostPort(r.RemoteAddr); err != nil {
-		// Assume the remote address is only a host; add a default port.
-		r.RemoteAddr = net.JoinHostPort(r.RemoteAddr, "80")
-	}
-
-	// Start goroutine responsible for flushing app logs.
-	// This is done after adding c to ctx.m (and stopped before removing it)
-	// because flushing logs requires making an API call.
-	go c.logFlusher(stopFlushing)
-
-	executeRequestSafely(c, r)
-	c.outHeader = nil // make sure header changes aren't respected any more
-
-	stopFlushing <- 1 // any logging beyond this point will be dropped
-
-	// Flush any pending logs asynchronously.
-	c.pendingLogs.Lock()
-	flushes := c.pendingLogs.flushes
-	if len(c.pendingLogs.lines) > 0 {
-		flushes++
-	}
-	c.pendingLogs.Unlock()
-	go c.flushLog(false)
-	w.Header().Set(logFlushHeader, strconv.Itoa(flushes))
-
-	// Avoid nil Write call if c.Write is never called.
-	if c.outCode != 0 {
-		w.WriteHeader(c.outCode)
-	}
-	if c.outBody != nil {
-		w.Write(c.outBody)
-	}
+// Middleware wraps an http handler so that it can make GAE API calls
+func Middleware(next http.Handler) http.Handler {
+	return handleHTTPMiddleware(executeRequestSafelyMiddleware(next))
 }
 
-func executeRequestSafely(c *context, r *http.Request) {
-	defer func() {
-		if x := recover(); x != nil {
-			logf(c, 4, "%s", renderPanic(x)) // 4 == critical
-			c.outCode = 500
+func handleHTTPMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := &aeContext{
+			req:       r,
+			outHeader: w.Header(),
 		}
-	}()
+		r = r.WithContext(withContext(r.Context(), c))
+		c.req = r
 
-	http.DefaultServeMux.ServeHTTP(c, r)
+		stopFlushing := make(chan int)
+
+		// Patch up RemoteAddr so it looks reasonable.
+		if addr := r.Header.Get(userIPHeader); addr != "" {
+			r.RemoteAddr = addr
+		} else if addr = r.Header.Get(remoteAddrHeader); addr != "" {
+			r.RemoteAddr = addr
+		} else {
+			// Should not normally reach here, but pick a sensible default anyway.
+			r.RemoteAddr = "127.0.0.1"
+		}
+		// The address in the headers will most likely be of these forms:
+		//	123.123.123.123
+		//	2001:db8::1
+		// net/http.Request.RemoteAddr is specified to be in "IP:port" form.
+		if _, _, err := net.SplitHostPort(r.RemoteAddr); err != nil {
+			// Assume the remote address is only a host; add a default port.
+			r.RemoteAddr = net.JoinHostPort(r.RemoteAddr, "80")
+		}
+
+		if logToLogservice() {
+			// Start goroutine responsible for flushing app logs.
+			// This is done after adding c to ctx.m (and stopped before removing it)
+			// because flushing logs requires making an API call.
+			go c.logFlusher(stopFlushing)
+		}
+
+		next.ServeHTTP(c, r)
+		c.outHeader = nil // make sure header changes aren't respected any more
+
+		flushed := make(chan struct{})
+		if logToLogservice() {
+			stopFlushing <- 1 // any logging beyond this point will be dropped
+
+			// Flush any pending logs asynchronously.
+			c.pendingLogs.Lock()
+			flushes := c.pendingLogs.flushes
+			if len(c.pendingLogs.lines) > 0 {
+				flushes++
+			}
+			c.pendingLogs.Unlock()
+			go func() {
+				defer close(flushed)
+				// Force a log flush, because with very short requests we
+				// may not ever flush logs.
+				c.flushLog(true)
+			}()
+			w.Header().Set(logFlushHeader, strconv.Itoa(flushes))
+		}
+
+		// Avoid nil Write call if c.Write is never called.
+		if c.outCode != 0 {
+			w.WriteHeader(c.outCode)
+		}
+		if c.outBody != nil {
+			w.Write(c.outBody)
+		}
+		if logToLogservice() {
+			// Wait for the last flush to complete before returning,
+			// otherwise the security ticket will not be valid.
+			<-flushed
+		}
+	})
+}
+
+func executeRequestSafelyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if x := recover(); x != nil {
+				c := w.(*aeContext)
+				logf(c, 4, "%s", renderPanic(x)) // 4 == critical
+				c.outCode = 500
+			}
+		}()
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func renderPanic(x interface{}) string {
@@ -191,21 +220,9 @@ func renderPanic(x interface{}) string {
 	return string(buf)
 }
 
-var ctxs = struct {
-	sync.Mutex
-	m  map[*http.Request]*context
-	bg *context // background context, lazily initialized
-	// dec is used by tests to decorate the netcontext.Context returned
-	// for a given request. This allows tests to add overrides (such as
-	// WithAppIDOverride) to the context. The map is nil outside tests.
-	dec map[*http.Request]func(netcontext.Context) netcontext.Context
-}{
-	m: make(map[*http.Request]*context),
-}
-
-// context represents the context of an in-flight HTTP request.
+// aeContext represents the aeContext of an in-flight HTTP request.
 // It implements the appengine.Context and http.ResponseWriter interfaces.
-type context struct {
+type aeContext struct {
 	req *http.Request
 
 	outCode   int
@@ -217,116 +234,86 @@ type context struct {
 		lines   []*logpb.UserAppLogLine
 		flushes int
 	}
-
-	apiURL *url.URL
 }
 
 var contextKey = "holds a *context"
 
-func fromContext(ctx netcontext.Context) *context {
-	c, _ := ctx.Value(&contextKey).(*context)
+// jointContext joins two contexts in a superficial way.
+// It takes values and timeouts from a base context, and only values from another context.
+type jointContext struct {
+	base       context.Context
+	valuesOnly context.Context
+}
+
+func (c jointContext) Deadline() (time.Time, bool) {
+	return c.base.Deadline()
+}
+
+func (c jointContext) Done() <-chan struct{} {
+	return c.base.Done()
+}
+
+func (c jointContext) Err() error {
+	return c.base.Err()
+}
+
+func (c jointContext) Value(key interface{}) interface{} {
+	if val := c.base.Value(key); val != nil {
+		return val
+	}
+	return c.valuesOnly.Value(key)
+}
+
+// fromContext returns the App Engine context or nil if ctx is not
+// derived from an App Engine context.
+func fromContext(ctx context.Context) *aeContext {
+	c, _ := ctx.Value(&contextKey).(*aeContext)
 	return c
 }
 
-func withContext(parent netcontext.Context, c *context) netcontext.Context {
-	ctx := netcontext.WithValue(parent, &contextKey, c)
+func withContext(parent context.Context, c *aeContext) context.Context {
+	ctx := context.WithValue(parent, &contextKey, c)
 	if ns := c.req.Header.Get(curNamespaceHeader); ns != "" {
 		ctx = withNamespace(ctx, ns)
 	}
 	return ctx
 }
 
-func toContext(c *context) netcontext.Context {
-	return withContext(netcontext.Background(), c)
+func toContext(c *aeContext) context.Context {
+	return withContext(context.Background(), c)
 }
 
-func IncomingHeaders(ctx netcontext.Context) http.Header {
+func IncomingHeaders(ctx context.Context) http.Header {
 	if c := fromContext(ctx); c != nil {
 		return c.req.Header
 	}
 	return nil
 }
 
-func WithContext(parent netcontext.Context, req *http.Request) netcontext.Context {
-	ctxs.Lock()
-	c := ctxs.m[req]
-	d := ctxs.dec[req]
-	ctxs.Unlock()
-
-	if d != nil {
-		parent = d(parent)
-	}
-
-	if c == nil {
-		// Someone passed in an http.Request that is not in-flight.
-		// We panic here rather than panicking at a later point
-		// so that stack traces will be more sensible.
-		log.Panic("appengine: NewContext passed an unknown http.Request")
-	}
-	return withContext(parent, c)
+func ReqContext(req *http.Request) context.Context {
+	return req.Context()
 }
 
-func BackgroundContext() netcontext.Context {
-	ctxs.Lock()
-	defer ctxs.Unlock()
-
-	if ctxs.bg != nil {
-		return toContext(ctxs.bg)
+func WithContext(parent context.Context, req *http.Request) context.Context {
+	return jointContext{
+		base:       parent,
+		valuesOnly: req.Context(),
 	}
-
-	// Compute background security ticket.
-	appID := partitionlessAppID()
-	escAppID := strings.Replace(strings.Replace(appID, ":", "_", -1), ".", "_", -1)
-	majVersion := VersionID(nil)
-	if i := strings.Index(majVersion, "."); i > 0 {
-		majVersion = majVersion[:i]
-	}
-	ticket := fmt.Sprintf("%s/%s.%s.%s", escAppID, ModuleName(nil), majVersion, InstanceID())
-
-	ctxs.bg = &context{
-		req: &http.Request{
-			Header: http.Header{
-				ticketHeader: []string{ticket},
-			},
-		},
-		apiURL: apiURL(),
-	}
-
-	// TODO(dsymonds): Wire up the shutdown handler to do a final flush.
-	go ctxs.bg.logFlusher(make(chan int))
-
-	return toContext(ctxs.bg)
 }
 
 // RegisterTestRequest registers the HTTP request req for testing, such that
-// any API calls are sent to the provided URL. It returns a closure to delete
-// the registration.
+// any API calls are sent to the provided URL.
 // It should only be used by aetest package.
-func RegisterTestRequest(req *http.Request, apiURL *url.URL, decorate func(netcontext.Context) netcontext.Context) func() {
-	c := &context{
-		req:    req,
-		apiURL: apiURL,
-	}
-	ctxs.Lock()
-	defer ctxs.Unlock()
-	if _, ok := ctxs.m[req]; ok {
-		log.Panic("req already associated with context")
-	}
-	if _, ok := ctxs.dec[req]; ok {
-		log.Panic("req already associated with context")
-	}
-	if ctxs.dec == nil {
-		ctxs.dec = make(map[*http.Request]func(netcontext.Context) netcontext.Context)
-	}
-	ctxs.m[req] = c
-	ctxs.dec[req] = decorate
+func RegisterTestRequest(req *http.Request, apiURL *url.URL, appID string) *http.Request {
+	ctx := req.Context()
+	ctx = withAPIHostOverride(ctx, apiURL.Hostname())
+	ctx = withAPIPortOverride(ctx, apiURL.Port())
+	ctx = WithAppIDOverride(ctx, appID)
 
-	return func() {
-		ctxs.Lock()
-		delete(ctxs.m, req)
-		delete(ctxs.dec, req)
-		ctxs.Unlock()
-	}
+	// use the unregistered request as a placeholder so that withContext can read the headers
+	c := &aeContext{req: req}
+	c.req = req.WithContext(withContext(ctx, c))
+	return c.req
 }
 
 var errTimeout = &CallError{
@@ -335,7 +322,7 @@ var errTimeout = &CallError{
 	Timeout: true,
 }
 
-func (c *context) Header() http.Header { return c.outHeader }
+func (c *aeContext) Header() http.Header { return c.outHeader }
 
 // Copied from $GOROOT/src/pkg/net/http/transfer.go. Some response status
 // codes do not permit a response body (nor response entity headers such as
@@ -352,7 +339,7 @@ func bodyAllowedForStatus(status int) bool {
 	return true
 }
 
-func (c *context) Write(b []byte) (int, error) {
+func (c *aeContext) Write(b []byte) (int, error) {
 	if c.outCode == 0 {
 		c.WriteHeader(http.StatusOK)
 	}
@@ -363,7 +350,7 @@ func (c *context) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (c *context) WriteHeader(code int) {
+func (c *aeContext) WriteHeader(code int) {
 	if c.outCode != 0 {
 		logf(c, 3, "WriteHeader called multiple times on request.") // error level
 		return
@@ -371,10 +358,11 @@ func (c *context) WriteHeader(code int) {
 	c.outCode = code
 }
 
-func (c *context) post(body []byte, timeout time.Duration) (b []byte, err error) {
+func post(ctx context.Context, body []byte, timeout time.Duration) (b []byte, err error) {
+	apiURL := apiURL(ctx)
 	hreq := &http.Request{
 		Method: "POST",
-		URL:    c.apiURL,
+		URL:    apiURL,
 		Header: http.Header{
 			apiEndpointHeader: apiEndpointHeaderValue,
 			apiMethodHeader:   apiMethodHeaderValue,
@@ -383,13 +371,16 @@ func (c *context) post(body []byte, timeout time.Duration) (b []byte, err error)
 		},
 		Body:          ioutil.NopCloser(bytes.NewReader(body)),
 		ContentLength: int64(len(body)),
-		Host:          c.apiURL.Host,
+		Host:          apiURL.Host,
 	}
-	if info := c.req.Header.Get(dapperHeader); info != "" {
-		hreq.Header.Set(dapperHeader, info)
-	}
-	if info := c.req.Header.Get(traceHeader); info != "" {
-		hreq.Header.Set(traceHeader, info)
+	c := fromContext(ctx)
+	if c != nil {
+		if info := c.req.Header.Get(dapperHeader); info != "" {
+			hreq.Header.Set(dapperHeader, info)
+		}
+		if info := c.req.Header.Get(traceHeader); info != "" {
+			hreq.Header.Set(traceHeader, info)
+		}
 	}
 
 	tr := apiHTTPClient.Transport.(*http.Transport)
@@ -431,7 +422,7 @@ func (c *context) post(body []byte, timeout time.Duration) (b []byte, err error)
 	return hrespBody, nil
 }
 
-func Call(ctx netcontext.Context, service, method string, in, out proto.Message) error {
+func Call(ctx context.Context, service, method string, in, out proto.Message) error {
 	if ns := NamespaceFromContext(ctx); ns != "" {
 		if fn, ok := NamespaceMods[service]; ok {
 			fn(in, ns)
@@ -450,15 +441,11 @@ func Call(ctx netcontext.Context, service, method string, in, out proto.Message)
 	}
 
 	c := fromContext(ctx)
-	if c == nil {
-		// Give a good error message rather than a panic lower down.
-		return errors.New("not an App Engine context")
-	}
 
 	// Apply transaction modifications if we're in a transaction.
 	if t := transactionFromContext(ctx); t != nil {
 		if t.finished {
-			return errors.New("transaction context has expired")
+			return errors.New("transaction aeContext has expired")
 		}
 		applyTransaction(in, &t.transaction)
 	}
@@ -474,7 +461,13 @@ func Call(ctx netcontext.Context, service, method string, in, out proto.Message)
 		return err
 	}
 
-	ticket := c.req.Header.Get(ticketHeader)
+	ticket := ""
+	if c != nil {
+		ticket = c.req.Header.Get(ticketHeader)
+		if dri := c.req.Header.Get(devRequestIdHeader); IsDevAppServer() && dri != "" {
+			ticket = dri
+		}
+	}
 	req := &remotepb.Request{
 		ServiceName: &service,
 		Method:      &method,
@@ -486,7 +479,7 @@ func Call(ctx netcontext.Context, service, method string, in, out proto.Message)
 		return err
 	}
 
-	hrespBody, err := c.post(hreqBody, timeout)
+	hrespBody, err := post(ctx, hreqBody, timeout)
 	if err != nil {
 		return err
 	}
@@ -523,11 +516,11 @@ func Call(ctx netcontext.Context, service, method string, in, out proto.Message)
 	return proto.Unmarshal(res.Response, out)
 }
 
-func (c *context) Request() *http.Request {
+func (c *aeContext) Request() *http.Request {
 	return c.req
 }
 
-func (c *context) addLogLine(ll *logpb.UserAppLogLine) {
+func (c *aeContext) addLogLine(ll *logpb.UserAppLogLine) {
 	// Truncate long log lines.
 	// TODO(dsymonds): Check if this is still necessary.
 	const lim = 8 << 10
@@ -549,20 +542,28 @@ var logLevelName = map[int64]string{
 	4: "CRITICAL",
 }
 
-func logf(c *context, level int64, format string, args ...interface{}) {
+func logf(c *aeContext, level int64, format string, args ...interface{}) {
+	if c == nil {
+		panic("not an App Engine aeContext")
+	}
 	s := fmt.Sprintf(format, args...)
 	s = strings.TrimRight(s, "\n") // Remove any trailing newline characters.
-	c.addLogLine(&logpb.UserAppLogLine{
-		TimestampUsec: proto.Int64(time.Now().UnixNano() / 1e3),
-		Level:         &level,
-		Message:       &s,
-	})
-	log.Print(logLevelName[level] + ": " + s)
+	if logToLogservice() {
+		c.addLogLine(&logpb.UserAppLogLine{
+			TimestampUsec: proto.Int64(time.Now().UnixNano() / 1e3),
+			Level:         &level,
+			Message:       &s,
+		})
+	}
+	// Log to stdout if not deployed
+	if !IsSecondGen() {
+		log.Print(logLevelName[level] + ": " + s)
+	}
 }
 
 // flushLog attempts to flush any pending logs to the appserver.
 // It should not be called concurrently.
-func (c *context) flushLog(force bool) (flushed bool) {
+func (c *aeContext) flushLog(force bool) (flushed bool) {
 	c.pendingLogs.Lock()
 	// Grab up to 30 MB. We can get away with up to 32 MB, but let's be cautious.
 	n, rem := 0, 30<<20
@@ -623,7 +624,7 @@ const (
 	forceFlushInterval = 60 * time.Second
 )
 
-func (c *context) logFlusher(stop <-chan int) {
+func (c *aeContext) logFlusher(stop <-chan int) {
 	lastFlush := time.Now()
 	tick := time.NewTicker(flushInterval)
 	for {
@@ -641,6 +642,12 @@ func (c *context) logFlusher(stop <-chan int) {
 	}
 }
 
-func ContextForTesting(req *http.Request) netcontext.Context {
-	return toContext(&context{req: req})
+func ContextForTesting(req *http.Request) context.Context {
+	return toContext(&aeContext{req: req})
+}
+
+func logToLogservice() bool {
+	// TODO: replace logservice with json structured logs to $LOG_DIR/app.log.json
+	// where $LOG_DIR is /var/log in prod and some tmpdir in dev
+	return os.Getenv("LOG_TO_LOGSERVICE") != "0"
 }

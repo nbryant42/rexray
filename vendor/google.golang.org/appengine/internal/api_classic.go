@@ -2,11 +2,13 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
+//go:build appengine
 // +build appengine
 
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,23 +19,28 @@ import (
 	basepb "appengine_internal/base"
 
 	"github.com/golang/protobuf/proto"
-	netcontext "golang.org/x/net/context"
 )
 
 var contextKey = "holds an appengine.Context"
 
-func fromContext(ctx netcontext.Context) appengine.Context {
+// fromContext returns the App Engine context or nil if ctx is not
+// derived from an App Engine context.
+func fromContext(ctx context.Context) appengine.Context {
 	c, _ := ctx.Value(&contextKey).(appengine.Context)
 	return c
 }
 
 // This is only for classic App Engine adapters.
-func ClassicContextFromContext(ctx netcontext.Context) appengine.Context {
-	return fromContext(ctx)
+func ClassicContextFromContext(ctx context.Context) (appengine.Context, error) {
+	c := fromContext(ctx)
+	if c == nil {
+		return nil, errNotAppEngineContext
+	}
+	return c, nil
 }
 
-func withContext(parent netcontext.Context, c appengine.Context) netcontext.Context {
-	ctx := netcontext.WithValue(parent, &contextKey, c)
+func withContext(parent context.Context, c appengine.Context) context.Context {
+	ctx := context.WithValue(parent, &contextKey, c)
 
 	s := &basepb.StringProto{}
 	c.Call("__go__", "GetNamespace", &basepb.VoidProto{}, s, nil)
@@ -44,7 +51,7 @@ func withContext(parent netcontext.Context, c appengine.Context) netcontext.Cont
 	return ctx
 }
 
-func IncomingHeaders(ctx netcontext.Context) http.Header {
+func IncomingHeaders(ctx context.Context) http.Header {
 	if c := fromContext(ctx); c != nil {
 		if req, ok := c.Request().(*http.Request); ok {
 			return req.Header
@@ -53,7 +60,11 @@ func IncomingHeaders(ctx netcontext.Context) http.Header {
 	return nil
 }
 
-func WithContext(parent netcontext.Context, req *http.Request) netcontext.Context {
+func ReqContext(req *http.Request) context.Context {
+	return WithContext(context.Background(), req)
+}
+
+func WithContext(parent context.Context, req *http.Request) context.Context {
 	c := appengine.NewContext(req)
 	return withContext(parent, c)
 }
@@ -73,11 +84,11 @@ func (t *testingContext) Call(service, method string, _, _ appengine_internal.Pr
 }
 func (t *testingContext) Request() interface{} { return t.req }
 
-func ContextForTesting(req *http.Request) netcontext.Context {
-	return withContext(netcontext.Background(), &testingContext{req: req})
+func ContextForTesting(req *http.Request) context.Context {
+	return withContext(context.Background(), &testingContext{req: req})
 }
 
-func Call(ctx netcontext.Context, service, method string, in, out proto.Message) error {
+func Call(ctx context.Context, service, method string, in, out proto.Message) error {
 	if ns := NamespaceFromContext(ctx); ns != "" {
 		if fn, ok := NamespaceMods[service]; ok {
 			fn(in, ns)
@@ -98,7 +109,7 @@ func Call(ctx netcontext.Context, service, method string, in, out proto.Message)
 	c := fromContext(ctx)
 	if c == nil {
 		// Give a good error message rather than a panic lower down.
-		return errors.New("not an App Engine context")
+		return errNotAppEngineContext
 	}
 
 	// Apply transaction modifications if we're in a transaction.
@@ -134,8 +145,8 @@ func Call(ctx netcontext.Context, service, method string, in, out proto.Message)
 	return err
 }
 
-func handleHTTP(w http.ResponseWriter, r *http.Request) {
-	panic("handleHTTP called; this should be impossible")
+func Middleware(next http.Handler) http.Handler {
+	panic("Middleware called; this should be impossible")
 }
 
 func logf(c appengine.Context, level int64, format string, args ...interface{}) {
