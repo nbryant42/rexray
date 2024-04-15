@@ -1,4 +1,4 @@
-FROM python:3.11-alpine3.18
+FROM python:3.11-alpine3.19
 
 RUN apk -U upgrade
 RUN apk add xfsprogs e2fsprogs ca-certificates nvme-cli

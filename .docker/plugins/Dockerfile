@@ -1,4 +1,4 @@
-FROM python:3.11-alpine3.18
+FROM python:3.11-alpine3.19
 
 RUN apk update
 RUN apk add xfsprogs e2fsprogs ca-certificates
