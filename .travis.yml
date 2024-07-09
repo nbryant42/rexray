@@ -14,7 +14,7 @@ jobs:
     - &build-stage
       stage:          build
       language:       go
-      go:             1.22.4-alpine3.19
+      go:             1.22.5-alpine3.19
       go_import_path: github.com/rexray/rexray
       env:            PROG=rexray
       before_script:
@@ -64,7 +64,7 @@ jobs:
     # results to codecov.io
     - stage:          test
       language:       go
-      go:             1.22.4-alpine3.19
+      go:             1.22.5-alpine3.19
       go_import_path: github.com/rexray/rexray
       before_script:
         - git fetch --unshallow --tags
